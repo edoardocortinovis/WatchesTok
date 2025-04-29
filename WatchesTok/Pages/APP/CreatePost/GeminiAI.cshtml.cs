@@ -70,15 +70,42 @@ namespace WatchesTok.Pages
 
                 // Costruisci il prompt per Gemini
                 var prompt = $@"
-                Sei un esperto di orologi di lusso. Genera contenuti per un post social su questo orologio: '{request.WatchName}'.
-                Fornisci le seguenti informazioni in formato JSON:
-                
-                1. Titolo: un titolo accattivante per il post (massimo 50 caratteri)
-                2. Descrizione: una descrizione dettagliata dell'orologio, le sue caratteristiche, storia e prestigio (circa 150-200 parole)
-                3. Hashtags: una lista di 5-7 hashtag rilevanti (includi la marca, il modello e tendenze del settore)
-                
-                Rispondi SOLO con un oggetto JSON con i campi 'Titolo', 'Descrizione', 'Hashtags'.";
 
+                Tu sei un validatore di nomi di orologi di lusso. Data la stringa '{{request.WatchName}}', segui queste istruzioni in modo PRECISO:
+
+STEP 1: VALUTAZIONE DEL NOME
+Verifica se '{{request.WatchName}}' rappresenta UN OROLOGIO REALE nel mondo dell'orologeria.
+Deve essere:
+- Un marchio specifico di orologi (esempio: Rolex, Omega, Patek Philippe)
+- Un modello specifico di orologio (esempio: Submariner, Speedmaster, Royal Oak)
+- Una combinazione precisa marca-modello (esempio: Rolex Daytona)
+
+STEP 2: DECISIONE RIGIDA
+Se '{{request.WatchName}}' è UNO QUALSIASI di questi:
+- Sequenza casuale di caratteri
+- Nome inventato
+- Termine generico (come ""orologio digitale"", ""orologio d'oro"")
+- Qualsiasi input che non sia SPECIFICAMENTE un orologio reale e riconosciuto
+- Qualsiasi cosa per cui hai IL MINIMO DUBBIO che sia un orologio reale
+
+ALLORA DEVI PRODURRE ESATTAMENTE QUESTO JSON:
+{{
+  ""Titolo"": ""errore"",
+  ""Descrizione"": ""errore"",
+  ""Hashtags"": ""errore""
+}}
+
+STEP 3: SOLO SE ASSOLUTAMENTE CERTO che '{{request.WatchName}}' è un orologio reale:
+Produci un JSON con:
+- ""Titolo"": titolo accattivante (max 50 caratteri)
+- ""Descrizione"": descrizione dettagliata dell'orologio (150-200 parole)
+- ""Hashtags"": 5-7 hashtag rilevanti
+
+RICORDA: In caso di QUALSIASI INCERTEZZA, rispondi con il JSON di errore. È MEGLIO dare errore su un orologio reale che fornire informazioni su uno non esistente.
+
+Rispondi SOLO con un oggetto JSON valido senza altro testo.                
+
+";
                 // Prepara la richiesta per Gemini
                 var geminiRequestObject = new
                 {
