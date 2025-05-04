@@ -32,6 +32,16 @@ namespace WatchesTok.Controllers
             public string WatchName { get; set; }
         }
 
+        // Classe per la risposta di validazione
+        private class ValidationResponse
+        {
+            [JsonPropertyName("isValid")]
+            public bool IsValid { get; set; }
+
+            [JsonPropertyName("reason")]
+            public string Reason { get; set; }
+        }
+
         // Classe intermedia per deserializzare la risposta di Gemini
         private class RawWatchContentResponse
         {
@@ -65,15 +75,32 @@ namespace WatchesTok.Controllers
 
             try
             {
+                // PASSO 1: Verifica prima se l'orologio esiste realmente
+                var isValidWatch = await ValidateWatchNameAsync(request.WatchName);
+
+                if (!isValidWatch.IsValid)
+                {
+                    // Se l'orologio non esiste, ritorna 404 Not Found con un messaggio chiaro
+                    return NotFound(new
+                    {
+                        error = "Orologio non trovato",
+                        message = $"'{request.WatchName}' non corrisponde ad alcun marchio o modello di orologio conosciuto.",
+                        details = isValidWatch.Reason
+                    });
+                }
+
+                // PASSO 2: Solo se l'orologio è valido, procedi con la generazione del contenuto
                 var client = _httpClientFactory.CreateClient();
                 client.Timeout = TimeSpan.FromSeconds(30);
 
                 var prompt = $@"
                 Sei un esperto di orologi di lusso. Genera contenuti per un post social sull'orologio: '{request.WatchName}'.
+                So già con certezza che questo è un orologio reale perché ho fatto una verifica preventiva.
+                
                 Fornisci le seguenti informazioni in formato JSON:
                 
                 1. Titolo: un titolo accattivante per il post (massimo 50 caratteri)
-                2. Descrizione: una descrizione dettagliata dell'orologio (circa 150 parole)
+                2. Descrizione: una descrizione dettagliata dell'orologio (circa 150 parole) che includa caratteristiche tecniche, materiali, movimento
                 3. Hashtags: un array di 5-7 hashtag rilevanti (puoi fornirli con o senza il simbolo #)
                 
                 Rispondi SOLO con un oggetto JSON con i campi 'Titolo', 'Descrizione', 'Hashtags'.";
@@ -164,6 +191,112 @@ namespace WatchesTok.Controllers
             }
         }
 
+        // Nuovo metodo per validare se il nome dell'orologio esiste realmente
+        private async Task<ValidationResponse> ValidateWatchNameAsync(string watchName)
+        {
+            try
+            {
+                var client = _httpClientFactory.CreateClient();
+
+                // Prompt di validazione specifico e dettagliato
+                var validationPrompt = $@"
+                SEI UN VALIDATORE SPECIALIZZATO IN OROLOGI DI LUSSO. Il tuo UNICO compito è determinare se l'input rappresenta un vero marchio o modello di orologi.
+
+                Input: '{watchName}'
+
+                REGOLE RIGIDE:
+                1. Verifica SOLO se l'input è un marchio di orologi (es. Rolex, Omega, Patek Philippe, Audemars Piguet) o un modello specifico (es. Submariner, Speedmaster)
+                2. Input che sono parole casuali, nomi inventati, o generici NON sono validi
+                3. Se hai QUALSIASI dubbio sulla validità, considera l'input NON VALIDO
+                4. Parole generiche come 'orologio d'oro', 'orologio digitale', 'smartwatch' NON sono validi
+                5. Il nome deve riferirsi a uno SPECIFICO marchio/modello REALE nel mondo dell'orologeria
+
+                Rispondi SOLO con un oggetto JSON con questa struttura esatta:
+                {{
+                  ""isValid"": true/false,
+                  ""reason"": ""breve spiegazione della decisione""
+                }}
+                
+                Se l'input somiglia a un marchio o modello reale ma con errori di ortografia, indicalo nella ragione e considera NON VALIDO.
+                ";
+
+                var validationRequestObject = new
+                {
+                    contents = new[]
+                    {
+                        new
+                        {
+                            parts = new[]
+                            {
+                                new
+                                {
+                                    text = validationPrompt
+                                }
+                            }
+                        }
+                    }
+                };
+
+                var validationRequestJson = JsonSerializer.Serialize(validationRequestObject);
+                var validationContent = new StringContent(validationRequestJson, Encoding.UTF8, "application/json");
+
+                _logger.LogInformation($"Verifica validità per: {watchName}");
+
+                var validationResponse = await client.PostAsync($"{_geminiApiUrl}?key={_geminiApiKey}", validationContent);
+                var validationResponseContent = await validationResponse.Content.ReadAsStringAsync();
+
+                if (!validationResponse.IsSuccessStatusCode)
+                {
+                    _logger.LogError($"Errore durante la validazione: {validationResponseContent}");
+                    return new ValidationResponse { IsValid = false, Reason = "Errore durante la validazione" };
+                }
+
+                // Estrai il JSON dalla risposta
+                using JsonDocument doc = JsonDocument.Parse(validationResponseContent);
+
+                string extractedText = "";
+                if (doc.RootElement.TryGetProperty("candidates", out var candidates) &&
+                    candidates.GetArrayLength() > 0)
+                {
+                    if (candidates[0].TryGetProperty("content", out var content) &&
+                        content.TryGetProperty("parts", out var parts) &&
+                        parts.GetArrayLength() > 0)
+                    {
+                        extractedText = parts[0].GetProperty("text").GetString() ?? "";
+                    }
+                }
+
+                // Trova e estrai il JSON dalla risposta
+                int startIndex = extractedText.IndexOf('{');
+                int endIndex = extractedText.LastIndexOf('}');
+
+                if (startIndex >= 0 && endIndex > startIndex)
+                {
+                    string jsonPart = extractedText.Substring(startIndex, endIndex - startIndex + 1);
+
+                    var options = new JsonSerializerOptions
+                    {
+                        PropertyNameCaseInsensitive = true
+                    };
+
+                    var result = JsonSerializer.Deserialize<ValidationResponse>(jsonPart, options);
+
+                    if (result != null)
+                    {
+                        _logger.LogInformation($"Validazione per '{watchName}': {(result.IsValid ? "VALIDO" : "NON VALIDO")} - {result.Reason}");
+                        return result;
+                    }
+                }
+
+                return new ValidationResponse { IsValid = false, Reason = "Impossibile determinare la validità" };
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, $"Eccezione durante la validazione: {ex.Message}");
+                return new ValidationResponse { IsValid = false, Reason = $"Errore durante la validazione: {ex.Message}" };
+            }
+        }
+
         // Metodo per convertire hashtags da vari formati a stringa
         private string ConvertHashtags(JsonElement hashtagsElement)
         {
@@ -203,6 +336,3 @@ namespace WatchesTok.Controllers
         }
     }
 }
-
-
-//FUNZIONANTE
